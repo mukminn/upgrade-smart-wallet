@@ -453,38 +453,87 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
         </>
       )}
 
-      {/* Main Upgrade Button - Prominent */}
-      {isConnected && isBaseAppWallet && needsUpgrade && latestBaseAppImpl && !showUpgradeDialog && (
+      {/* Main Upgrade Button - Always Visible When Connected */}
+      {isConnected && address && !checkingWallet && (
         <div className="bg-gradient-to-r from-blue-600/20 to-purple-600/20 border-2 border-blue-500/50 rounded-xl p-6">
           <div className="text-center mb-4">
             <h3 className="text-xl font-bold text-white mb-2">
-              ⚡ Upgrade Available
+              {isBaseAppWallet && needsUpgrade ? (
+                <>⚡ Upgrade Available</>
+              ) : isBaseAppWallet ? (
+                <>✓ Wallet Up to Date</>
+              ) : (
+                <>🔧 Upgrade Smart Wallet</>
+              )}
             </h3>
             <p className="text-gray-300 text-sm">
-              Your wallet can be upgraded to the latest version
+              {isBaseAppWallet && needsUpgrade
+                ? 'Your wallet can be upgraded to the latest version'
+                : isBaseAppWallet
+                ? 'Your wallet is already on the latest version'
+                : 'Upgrade your smart wallet to the latest implementation'}
             </p>
           </div>
-          <button
-            onClick={handleAutoUpgrade}
-            disabled={loading}
-            className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 disabled:from-gray-600 disabled:to-gray-600 disabled:cursor-not-allowed text-white font-bold py-5 px-8 rounded-xl shadow-2xl transition-all duration-200 flex items-center justify-center gap-3 text-lg transform hover:scale-105"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="w-6 h-6 animate-spin" />
-                <span>Signing Transaction...</span>
-              </>
-            ) : (
-              <>
-                <ArrowUpCircle className="w-6 h-6" />
-                <span>Sign & Upgrade Wallet</span>
-                <Zap className="w-5 h-5" />
-              </>
-            )}
-          </button>
-          <p className="text-center text-xs text-gray-400 mt-3">
-            💰 Network fees sponsored by Base
-          </p>
+          
+          {isBaseAppWallet && needsUpgrade && latestBaseAppImpl ? (
+            <button
+              onClick={handleAutoUpgrade}
+              disabled={loading}
+              className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 disabled:from-gray-600 disabled:to-gray-600 disabled:cursor-not-allowed text-white font-bold py-5 px-8 rounded-xl shadow-2xl transition-all duration-200 flex items-center justify-center gap-3 text-lg transform hover:scale-105"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <span>Signing Transaction...</span>
+                </>
+              ) : (
+                <>
+                  <ArrowUpCircle className="w-6 h-6" />
+                  <span>Sign & Upgrade Wallet</span>
+                  <Zap className="w-5 h-5" />
+                </>
+              )}
+            </button>
+          ) : isBaseAppWallet ? (
+            <div className="bg-green-500/20 border border-green-500/40 rounded-xl p-4 text-center">
+              <CheckCircle className="w-8 h-8 text-green-400 mx-auto mb-2" />
+              <p className="text-green-400 font-semibold">No upgrade needed</p>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                if (newImplementation) {
+                  handleUpgrade();
+                } else {
+                  setUpgradeStatus({
+                    type: 'error',
+                    message: 'Please enter new implementation address or connect a BaseApp wallet',
+                  });
+                }
+              }}
+              disabled={loading || !newImplementation}
+              className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 disabled:from-gray-600 disabled:to-gray-600 disabled:cursor-not-allowed text-white font-bold py-5 px-8 rounded-xl shadow-2xl transition-all duration-200 flex items-center justify-center gap-3 text-lg transform hover:scale-105"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <span>Signing Transaction...</span>
+                </>
+              ) : (
+                <>
+                  <ArrowUpCircle className="w-6 h-6" />
+                  <span>Sign & Upgrade Wallet</span>
+                  <Zap className="w-5 h-5" />
+                </>
+              )}
+            </button>
+          )}
+          
+          {isBaseAppWallet && needsUpgrade && (
+            <p className="text-center text-xs text-gray-400 mt-3">
+              💰 Network fees sponsored by Base
+            </p>
+          )}
         </div>
       )}
 
