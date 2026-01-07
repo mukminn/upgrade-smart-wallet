@@ -475,43 +475,37 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
             </p>
           </div>
           
-          {isBaseAppWallet && needsUpgrade && latestBaseAppImpl ? (
-            <button
-              onClick={handleAutoUpgrade}
-              disabled={loading}
-              className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 disabled:from-gray-600 disabled:to-gray-600 disabled:cursor-not-allowed text-white font-bold py-5 px-8 rounded-xl shadow-2xl transition-all duration-200 flex items-center justify-center gap-3 text-lg transform hover:scale-105"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                  <span>Signing Transaction...</span>
-                </>
-              ) : (
-                <>
-                  <ArrowUpCircle className="w-6 h-6" />
-                  <span>Sign & Upgrade Wallet</span>
-                  <Zap className="w-5 h-5" />
-                </>
-              )}
-            </button>
-          ) : isBaseAppWallet ? (
+          {isBaseAppWallet && !needsUpgrade ? (
             <div className="bg-green-500/20 border border-green-500/40 rounded-xl p-4 text-center">
               <CheckCircle className="w-8 h-8 text-green-400 mx-auto mb-2" />
               <p className="text-green-400 font-semibold">No upgrade needed</p>
             </div>
           ) : (
             <button
-              onClick={() => {
-                if (newImplementation) {
-                  handleUpgrade();
+              onClick={async () => {
+                if (isBaseAppWallet && needsUpgrade && latestBaseAppImpl) {
+                  await handleAutoUpgrade();
+                } else if (isBaseAppWallet) {
+                  // Try to upgrade even if needsUpgrade is false (force upgrade)
+                  await handleAutoUpgrade();
                 } else {
-                  setUpgradeStatus({
-                    type: 'error',
-                    message: 'Please enter new implementation address or connect a BaseApp wallet',
-                  });
+                  // For non-BaseApp wallets, try to upgrade with current address
+                  if (address) {
+                    setWalletAddress(address);
+                    // Try to get implementation and upgrade
+                    await handleGetImplementation();
+                    if (newImplementation) {
+                      await handleUpgrade();
+                    } else {
+                      setUpgradeStatus({
+                        type: 'error',
+                        message: 'Could not determine upgrade path. Please ensure this is an upgradeable wallet.',
+                      });
+                    }
+                  }
                 }
               }}
-              disabled={loading || !newImplementation}
+              disabled={loading}
               className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 disabled:from-gray-600 disabled:to-gray-600 disabled:cursor-not-allowed text-white font-bold py-5 px-8 rounded-xl shadow-2xl transition-all duration-200 flex items-center justify-center gap-3 text-lg transform hover:scale-105"
             >
               {loading ? (

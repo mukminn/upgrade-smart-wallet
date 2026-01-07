@@ -85,25 +85,6 @@ export default function Home() {
             )}
           </div>
 
-          {/* Supported Chains Info */}
-          <div className="mt-8 bg-white/5 backdrop-blur-lg rounded-xl p-6 border border-white/10">
-            <h3 className="text-lg font-semibold text-white mb-4">
-              Supported Networks
-            </h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              {supportedChains.map((chain) => (
-                <div
-                  key={chain.id}
-                  className="bg-white/5 rounded-lg p-3 text-center border border-white/10 hover:border-blue-400/50 transition-colors"
-                >
-                  <div className="text-2xl mb-1">{chain.icon}</div>
-                  <div className="text-sm text-gray-300 font-medium">
-                    {chain.shortName}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
     </main>
