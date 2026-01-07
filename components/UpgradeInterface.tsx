@@ -15,6 +15,10 @@ import {
   getBaseWalletVersion,
   supportsBaseUpgrade
 } from '@/lib/base-wallet-upgrade';
+import {
+  detectImplementation,
+  isContract
+} from '@/lib/implementation-detector';
 import { getChainById } from '@/lib/chains';
 import { ArrowUpCircle, Loader2, CheckCircle, XCircle, Info, Zap } from 'lucide-react';
 
@@ -117,21 +121,18 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
               setNewImplementation(latest);
             }
           } else {
-            // Not a Base-sponsored wallet - try to get implementation anyway
-            let current: string | null = null;
+            // Not a Base-sponsored wallet - try comprehensive detection
             try {
-              // Try storage slot method for any upgradeable contract
-              const IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
-              const storage = await publicClient.getStorageAt({
-                address: address as `0x${string}`,
-                slot: IMPLEMENTATION_SLOT as `0x${string}`,
-              });
-              if (storage && storage !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
-                current = '0x' + storage.slice(-40);
-                setCurrentImplementation(current);
+              const detectionResult = await detectImplementation(provider, publicClient, address);
+              
+              if (detectionResult.implementation) {
+                setCurrentImplementation(detectionResult.implementation);
+                setUpgradedChains(prev => new Set([...prev, chainId]));
+              } else {
+                setCurrentImplementation(null);
               }
-            } catch {
-              // Not an upgradeable contract
+            } catch (error) {
+              console.error('Error detecting implementation:', error);
               setCurrentImplementation(null);
             }
             setIsBaseSponsoredWallet(false);
@@ -569,54 +570,43 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
                   if (address && publicClient) {
                     setLoading(true);
                     try {
-                        // Get current implementation first - try multiple methods
-                        let currentImpl: string | null = null;
-                        
-                        // Method 1: Try Coinbase Smart Wallet implementation() function
+                        // Use comprehensive detection
                         if (typeof window !== 'undefined' && window.ethereum) {
-                          try {
-                            const provider = new ethers.BrowserProvider(window.ethereum);
-                            currentImpl = await getBaseSponsoredWalletImplementation(provider, address);
-                          } catch {
-                            // Continue to next method
-                          }
-                        }
-                        
-                        // Method 2: Try storage slot (EIP-1967)
-                        if (!currentImpl) {
-                          try {
-                            const IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
-                            const storage = await publicClient.getStorageAt({
-                              address: address as `0x${string}`,
-                              slot: IMPLEMENTATION_SLOT as `0x${string}`,
-                            });
-
-                            if (storage && storage !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
-                              currentImpl = '0x' + storage.slice(-40);
-                            }
-                          } catch {
-                            // Continue
-                          }
-                        }
-                        
-                        if (currentImpl) {
-                          setCurrentImplementation(currentImpl);
-                          setUpgradedChains(prev => new Set([...prev, chainId]));
+                          const provider = new ethers.BrowserProvider(window.ethereum);
                           
-                          // If we have new implementation, proceed with upgrade
-                          if (newImplementation) {
-                            await handleUpgrade();
+                          // Check if it's a contract first
+                          const isContractAddress = await isContract(provider, address);
+                          if (!isContractAddress) {
+                            setUpgradeStatus({
+                              type: 'error',
+                              message: 'This address is not a contract. It appears to be an EOA (Externally Owned Account). Only smart contract wallets can be upgraded.',
+                            });
+                            setLoading(false);
+                            return;
+                          }
+                          
+                          // Try comprehensive detection
+                          const detectionResult = await detectImplementation(provider, publicClient, address);
+                          
+                          if (detectionResult.implementation) {
+                            setCurrentImplementation(detectionResult.implementation);
+                            setUpgradedChains(prev => new Set([...prev, chainId]));
+                            
+                            // If we have new implementation, proceed with upgrade
+                            if (newImplementation) {
+                              await handleUpgrade();
+                            } else {
+                              setUpgradeStatus({
+                                type: 'error',
+                                message: `Please provide new implementation address. Current implementation: ${detectionResult.implementation} (detected via ${detectionResult.method})`,
+                              });
+                            }
                           } else {
                             setUpgradeStatus({
                               type: 'error',
-                              message: `Please provide new implementation address. Current implementation: ${currentImpl}`,
+                              message: `This wallet does not appear to be an upgradeable contract. Tried multiple detection methods but no implementation address found. The address is a contract but may not use standard upgradeable patterns (UUPS, Transparent Proxy, or EIP-1967).`,
                             });
                           }
-                        } else {
-                          setUpgradeStatus({
-                            type: 'error',
-                            message: 'This wallet does not appear to be an upgradeable contract. No implementation address found. Please ensure this is a Coinbase Smart Wallet or other upgradeable contract.',
-                          });
                         }
                     } catch (error: any) {
                       setUpgradeStatus({
