@@ -75,34 +75,65 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
             const latest = await getLatestBaseSponsoredImplementation(provider, chainId);
             setLatestBaseSponsoredImpl(latest);
             
-            // Only get current implementation if this chain has been upgraded
-            if (upgradedChains.has(chainId)) {
-              const current = await getBaseSponsoredWalletImplementation(provider, address);
+            // Always try to get current implementation for Base-sponsored wallets
+            let current: string | null = null;
+            try {
+              // Try Coinbase Smart Wallet method first
+              current = await getBaseSponsoredWalletImplementation(provider, address);
+            } catch {
+              // Fallback to storage slot method
+              try {
+                const IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
+                const storage = await publicClient.getStorageAt({
+                  address: address as `0x${string}`,
+                  slot: IMPLEMENTATION_SLOT as `0x${string}`,
+                });
+                if (storage && storage !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
+                  current = '0x' + storage.slice(-40);
+                }
+              } catch {
+                // If both methods fail, current stays null
+              }
+            }
+            
+            // Set implementation if found
+            if (current) {
               setCurrentImplementation(current);
-            } else {
-              // Don't show implementation for chains that haven't been upgraded
-              setCurrentImplementation(null);
+              // Mark chain as having implementation (even if not upgraded yet)
+              setUpgradedChains(prev => new Set([...prev, chainId]));
             }
             
             // Check if upgrade is needed
-            if (latest) {
-              if (upgradedChains.has(chainId)) {
-                const current = await getBaseSponsoredWalletImplementation(provider, address);
-                if (current && latest.toLowerCase() !== current.toLowerCase()) {
-                  setNeedsUpgrade(true);
-                  setNewImplementation(latest);
-                } else {
-                  setNeedsUpgrade(false);
-                }
-              } else {
-                // Chain not upgraded yet, upgrade is available
+            if (latest && current) {
+              if (latest.toLowerCase() !== current.toLowerCase()) {
                 setNeedsUpgrade(true);
                 setNewImplementation(latest);
+              } else {
+                setNeedsUpgrade(false);
               }
+            } else if (latest && !current) {
+              // Have latest but no current - upgrade available
+              setNeedsUpgrade(true);
+              setNewImplementation(latest);
             }
           } else {
-            // Not a Base-sponsored wallet - don't show implementation
-            setCurrentImplementation(null);
+            // Not a Base-sponsored wallet - try to get implementation anyway
+            let current: string | null = null;
+            try {
+              // Try storage slot method for any upgradeable contract
+              const IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
+              const storage = await publicClient.getStorageAt({
+                address: address as `0x${string}`,
+                slot: IMPLEMENTATION_SLOT as `0x${string}`,
+              });
+              if (storage && storage !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
+                current = '0x' + storage.slice(-40);
+                setCurrentImplementation(current);
+              }
+            } catch {
+              // Not an upgradeable contract
+              setCurrentImplementation(null);
+            }
             setIsBaseSponsoredWallet(false);
           }
         }
@@ -538,32 +569,55 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
                   if (address && publicClient) {
                     setLoading(true);
                     try {
-                      // Get current implementation first
-                      const IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
-                      const storage = await publicClient.getStorageAt({
-                        address: address as `0x${string}`,
-                        slot: IMPLEMENTATION_SLOT as `0x${string}`,
-                      });
-
-                      if (storage && storage !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
-                        const currentImpl = '0x' + storage.slice(-40);
-                        setCurrentImplementation(currentImpl);
+                        // Get current implementation first - try multiple methods
+                        let currentImpl: string | null = null;
                         
-                        // If we have new implementation, proceed with upgrade
-                        if (newImplementation) {
-                          await handleUpgrade();
+                        // Method 1: Try Coinbase Smart Wallet implementation() function
+                        if (typeof window !== 'undefined' && window.ethereum) {
+                          try {
+                            const provider = new ethers.BrowserProvider(window.ethereum);
+                            currentImpl = await getBaseSponsoredWalletImplementation(provider, address);
+                          } catch {
+                            // Continue to next method
+                          }
+                        }
+                        
+                        // Method 2: Try storage slot (EIP-1967)
+                        if (!currentImpl) {
+                          try {
+                            const IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
+                            const storage = await publicClient.getStorageAt({
+                              address: address as `0x${string}`,
+                              slot: IMPLEMENTATION_SLOT as `0x${string}`,
+                            });
+
+                            if (storage && storage !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
+                              currentImpl = '0x' + storage.slice(-40);
+                            }
+                          } catch {
+                            // Continue
+                          }
+                        }
+                        
+                        if (currentImpl) {
+                          setCurrentImplementation(currentImpl);
+                          setUpgradedChains(prev => new Set([...prev, chainId]));
+                          
+                          // If we have new implementation, proceed with upgrade
+                          if (newImplementation) {
+                            await handleUpgrade();
+                          } else {
+                            setUpgradeStatus({
+                              type: 'error',
+                              message: `Please provide new implementation address. Current implementation: ${currentImpl}`,
+                            });
+                          }
                         } else {
                           setUpgradeStatus({
                             type: 'error',
-                            message: 'Please provide new implementation address. Current implementation: ' + currentImpl.slice(0, 10) + '...',
+                            message: 'This wallet does not appear to be an upgradeable contract. No implementation address found. Please ensure this is a Coinbase Smart Wallet or other upgradeable contract.',
                           });
                         }
-                      } else {
-                        setUpgradeStatus({
-                          type: 'error',
-                          message: 'This wallet does not appear to be an upgradeable contract. No implementation address found.',
-                        });
-                      }
                     } catch (error: any) {
                       setUpgradeStatus({
                         type: 'error',
@@ -601,40 +655,70 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
         </div>
       )}
 
-      {/* Implementation Address Display - Only Show for Upgraded Chains */}
-      {isConnected && upgradedChains.has(chainId) && currentImplementation && (
+      {/* Implementation Address Display - Show for Any Wallet with Implementation */}
+      {isConnected && currentImplementation && (
         <div className="bg-gradient-to-r from-green-500/10 to-blue-500/10 border-2 border-green-500/30 rounded-xl p-6">
           <div className="flex items-center gap-2 mb-4">
             <CheckCircle className="w-6 h-6 text-green-400" />
-            <h3 className="text-lg font-bold text-white">Base Sponsored Implementation ({chain?.name})</h3>
+            <h3 className="text-lg font-bold text-white">
+              {isBaseSponsoredWallet 
+                ? `Base Sponsored Implementation (${chain?.name})`
+                : `Smart Wallet Implementation (${chain?.name})`}
+            </h3>
           </div>
           
-          {currentImplementation && (
-            <>
-              <div className="bg-gray-900/50 rounded-lg p-4 mb-3">
-                <div className="text-xs text-gray-400 mb-1">Current Implementation Address</div>
-                <div className="text-base font-mono text-green-400 break-all font-semibold">
-                  {currentImplementation}
-                </div>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(currentImplementation);
-                    setUpgradeStatus({
-                      type: 'success',
-                      message: 'Implementation address copied to clipboard!',
-                    });
-                  }}
-                  className="mt-2 text-xs text-blue-400 hover:text-blue-300"
+          <div className="bg-gray-900/50 rounded-lg p-4 mb-3">
+            <div className="text-xs text-gray-400 mb-2">Current Implementation Address</div>
+            <div className="text-base font-mono text-green-400 break-all font-semibold leading-relaxed">
+              {currentImplementation}
+            </div>
+            <div className="flex gap-2 mt-3">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(currentImplementation);
+                  setUpgradeStatus({
+                    type: 'success',
+                    message: 'Implementation address copied to clipboard!',
+                  });
+                }}
+                className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded transition-colors"
+              >
+                📋 Copy Full Address
+              </button>
+              {chain?.chain.blockExplorers?.default && (
+                <a
+                  href={`${chain.chain.blockExplorers.default.url}/address/${currentImplementation}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded transition-colors"
                 >
-                  📋 Copy Address
-                </button>
-              </div>
-              
-              {latestBaseSponsoredImpl && latestBaseSponsoredImpl.toLowerCase() !== currentImplementation.toLowerCase() && (
-                <div className="bg-gray-900/50 rounded-lg p-4">
-                  <div className="text-xs text-gray-400 mb-1">Latest Available Implementation (Base Sponsored)</div>
-                  <div className="text-base font-mono text-blue-400 break-all font-semibold">
+                  🔍 View on Explorer
+                </a>
+              )}
+            </div>
+          </div>
+          
+          {isBaseSponsoredWallet && latestBaseSponsoredImpl && (
+            <>
+              {latestBaseSponsoredImpl.toLowerCase() !== currentImplementation.toLowerCase() && (
+                <div className="bg-gray-900/50 rounded-lg p-4 mb-3">
+                  <div className="text-xs text-gray-400 mb-2">Latest Available Implementation (Base Sponsored)</div>
+                  <div className="text-base font-mono text-blue-400 break-all font-semibold leading-relaxed">
                     {latestBaseSponsoredImpl}
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(latestBaseSponsoredImpl);
+                        setUpgradeStatus({
+                          type: 'success',
+                          message: 'Latest implementation address copied!',
+                        });
+                      }}
+                      className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded transition-colors"
+                    >
+                      📋 Copy Address
+                    </button>
                   </div>
                   <div className="text-xs text-yellow-400 mt-2">
                     ⚠️ Upgrade available to latest version
@@ -642,7 +726,7 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
                 </div>
               )}
               
-              {latestBaseSponsoredImpl && latestBaseSponsoredImpl.toLowerCase() === currentImplementation.toLowerCase() && (
+              {latestBaseSponsoredImpl.toLowerCase() === currentImplementation.toLowerCase() && (
                 <div className="bg-green-500/20 border border-green-500/40 rounded-lg p-3 text-center">
                   <CheckCircle className="w-5 h-5 text-green-400 mx-auto mb-1" />
                   <p className="text-green-400 text-sm font-medium">✓ Wallet is on the latest Base-sponsored implementation</p>
