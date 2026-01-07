@@ -1,11 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAccount, usePublicClient, useWalletClient } from 'wagmi';
 import { ethers } from 'ethers';
 import { upgradeSmartWallet, getImplementationAddress } from '@/lib/wallet-upgrade';
+import { 
+  upgradeBaseAppSmartWallet, 
+  getLatestBaseAppImplementation,
+  getBaseAppWalletImplementation,
+  isBaseAppSmartWallet 
+} from '@/lib/baseapp-upgrade';
 import { getChainById } from '@/lib/chains';
-import { ArrowUpCircle, Loader2, CheckCircle, XCircle, Info } from 'lucide-react';
+import { ArrowUpCircle, Loader2, CheckCircle, XCircle, Info, Zap } from 'lucide-react';
 
 interface UpgradeInterfaceProps {
   chainId: number;
@@ -20,6 +26,9 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
   const [newImplementation, setNewImplementation] = useState('');
   const [currentImplementation, setCurrentImplementation] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isBaseAppWallet, setIsBaseAppWallet] = useState(false);
+  const [latestBaseAppImpl, setLatestBaseAppImpl] = useState<string | null>(null);
+  const [autoUpgradeMode, setAutoUpgradeMode] = useState(false);
   const [upgradeStatus, setUpgradeStatus] = useState<{
     type: 'success' | 'error' | null;
     message: string;
@@ -27,6 +36,45 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
   }>({ type: null, message: '' });
 
   const chain = getChainById(chainId);
+
+  // Auto-detect BaseApp wallet when address changes
+  useEffect(() => {
+    const checkBaseAppWallet = async () => {
+      if (!walletAddress || !publicClient) {
+        setIsBaseAppWallet(false);
+        setLatestBaseAppImpl(null);
+        return;
+      }
+
+      try {
+        if (typeof window !== 'undefined' && window.ethereum) {
+          const provider = new ethers.BrowserProvider(window.ethereum);
+          const isBaseApp = await isBaseAppSmartWallet(provider, walletAddress);
+          setIsBaseAppWallet(isBaseApp);
+
+          if (isBaseApp) {
+            // Get latest implementation
+            const latest = await getLatestBaseAppImplementation(provider, chainId);
+            setLatestBaseAppImpl(latest);
+            
+            // Get current implementation
+            const current = await getBaseAppWalletImplementation(provider, walletAddress);
+            setCurrentImplementation(current);
+            
+            // Auto-fill new implementation if available
+            if (latest) {
+              setNewImplementation(latest);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error checking BaseApp wallet:', error);
+        setIsBaseAppWallet(false);
+      }
+    };
+
+    checkBaseAppWallet();
+  }, [walletAddress, chainId, publicClient]);
 
   const handleGetImplementation = async () => {
     if (!walletAddress || !publicClient) return;
@@ -67,6 +115,57 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
     }
   };
 
+  const handleAutoUpgrade = async () => {
+    if (!walletAddress || !isBaseAppWallet || !walletClient) {
+      setUpgradeStatus({
+        type: 'error',
+        message: 'Please connect a BaseApp Smart Wallet',
+      });
+      return;
+    }
+
+    setLoading(true);
+    setUpgradeStatus({ type: null, message: '' });
+
+    try {
+      if (typeof window !== 'undefined' && window.ethereum) {
+        const provider = new ethers.BrowserProvider(window.ethereum);
+
+        const result = await upgradeBaseAppSmartWallet({
+          walletAddress,
+          chainId,
+          provider,
+        });
+
+        if (result.success && result.txHash) {
+          setUpgradeStatus({
+            type: 'success',
+            message: `BaseApp Smart Wallet upgraded successfully! New implementation: ${result.newImplementation?.slice(0, 10)}...`,
+            txHash: result.txHash,
+          });
+          // Refresh implementation address
+          setTimeout(() => {
+            handleGetImplementation();
+          }, 2000);
+        } else {
+          setUpgradeStatus({
+            type: result.error?.includes('already') ? 'success' : 'error',
+            message: result.error || 'Upgrade failed',
+          });
+        }
+      } else {
+        throw new Error('Wallet not connected');
+      }
+    } catch (error: any) {
+      setUpgradeStatus({
+        type: 'error',
+        message: error.message || 'Upgrade failed',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleUpgrade = async () => {
     if (!walletAddress || !newImplementation || !walletClient) {
       setUpgradeStatus({
@@ -80,35 +179,62 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
     setUpgradeStatus({ type: null, message: '' });
 
     try {
-      // Create ethers provider from wallet client
-      if (typeof window !== 'undefined' && window.ethereum) {
-        const provider = new ethers.BrowserProvider(window.ethereum);
-        const signer = await provider.getSigner();
-
-        const result = await upgradeSmartWallet(provider, {
-          walletAddress,
-          newImplementation,
-          chainId,
-        });
-
-        if (result.success && result.txHash) {
-          setUpgradeStatus({
-            type: 'success',
-            message: 'Upgrade transaction submitted successfully!',
-            txHash: result.txHash,
+      // If it's a BaseApp wallet, use BaseApp upgrade function
+      if (isBaseAppWallet) {
+        if (typeof window !== 'undefined' && window.ethereum) {
+          const provider = new ethers.BrowserProvider(window.ethereum);
+          const result = await upgradeBaseAppSmartWallet({
+            walletAddress,
+            chainId,
+            provider,
           });
-          // Refresh implementation address
-          setTimeout(() => {
-            handleGetImplementation();
-          }, 2000);
-        } else {
-          setUpgradeStatus({
-            type: 'error',
-            message: result.error || 'Upgrade failed',
-          });
+
+          if (result.success && result.txHash) {
+            setUpgradeStatus({
+              type: 'success',
+              message: 'BaseApp Smart Wallet upgraded successfully!',
+              txHash: result.txHash,
+            });
+            setTimeout(() => {
+              handleGetImplementation();
+            }, 2000);
+          } else {
+            setUpgradeStatus({
+              type: 'error',
+              message: result.error || 'Upgrade failed',
+            });
+          }
         }
       } else {
-        throw new Error('Wallet not connected');
+        // Use generic upgrade for non-BaseApp wallets
+        if (typeof window !== 'undefined' && window.ethereum) {
+          const provider = new ethers.BrowserProvider(window.ethereum);
+          const signer = await provider.getSigner();
+
+          const result = await upgradeSmartWallet(provider, {
+            walletAddress,
+            newImplementation,
+            chainId,
+          });
+
+          if (result.success && result.txHash) {
+            setUpgradeStatus({
+              type: 'success',
+              message: 'Upgrade transaction submitted successfully!',
+              txHash: result.txHash,
+            });
+            setTimeout(() => {
+              handleGetImplementation();
+            }, 2000);
+          } else {
+            setUpgradeStatus({
+              type: 'error',
+              message: result.error || 'Upgrade failed',
+            });
+          }
+        } else {
+          throw new Error('Wallet not connected');
+        }
       }
     } catch (error: any) {
       setUpgradeStatus({
@@ -148,20 +274,45 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
           placeholder="0x..."
           className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
-        <button
-          onClick={handleGetImplementation}
-          disabled={loading || !walletAddress}
-          className="mt-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors"
-        >
-          {loading ? (
-            <span className="flex items-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Checking...
-            </span>
-          ) : (
-            'Get Current Implementation'
+        <div className="flex gap-2 mt-2">
+          <button
+            onClick={handleGetImplementation}
+            disabled={loading || !walletAddress}
+            className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors"
+          >
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Checking...
+              </span>
+            ) : (
+              'Get Current Implementation'
+            )}
+          </button>
+          {isBaseAppWallet && latestBaseAppImpl && (
+            <button
+              onClick={handleAutoUpgrade}
+              disabled={loading || !walletAddress}
+              className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 disabled:from-gray-600 disabled:to-gray-600 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center gap-2"
+            >
+              <Zap className="w-4 h-4" />
+              Auto Upgrade BaseApp
+            </button>
           )}
-        </button>
+        </div>
+        {isBaseAppWallet && (
+          <div className="mt-2 bg-purple-500/10 border border-purple-500/20 rounded-lg p-3">
+            <div className="flex items-center gap-2 text-purple-400">
+              <CheckCircle className="w-4 h-4" />
+              <span className="text-sm font-medium">BaseApp Smart Wallet Detected</span>
+            </div>
+            {latestBaseAppImpl && (
+              <div className="text-xs text-gray-400 mt-1">
+                Latest implementation: {latestBaseAppImpl.slice(0, 20)}...
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Current Implementation Display */}
