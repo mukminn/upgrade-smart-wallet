@@ -33,9 +33,9 @@ A modern web application for upgrading smart wallets across multiple blockchain 
 npm install
 ```
 
-2. Update the WalletConnect Project ID in `app/providers.tsx`:
-```typescript
-projectId: 'YOUR_PROJECT_ID', // Replace with your actual project ID
+2. The WalletConnect Project ID is already configured in `app/providers.tsx`. You can also set it via environment variable:
+```bash
+NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=your_project_id
 ```
 
 3. Run the development server:
