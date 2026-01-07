@@ -10,6 +10,11 @@ import {
   getBaseSponsoredWalletImplementation,
   isBaseSponsoredSmartWallet 
 } from '@/lib/baseapp-upgrade';
+import {
+  upgradeBaseWallet,
+  getBaseWalletVersion,
+  supportsBaseUpgrade
+} from '@/lib/base-wallet-upgrade';
 import { getChainById } from '@/lib/chains';
 import { ArrowUpCircle, Loader2, CheckCircle, XCircle, Info, Zap } from 'lucide-react';
 
@@ -152,7 +157,7 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
   };
 
   const handleAutoUpgrade = async () => {
-    if (!walletAddress || !isBaseSponsoredWallet || !walletClient) {
+    if (!walletAddress || !isBaseSponsoredWallet) {
       setUpgradeStatus({
         type: 'error',
         message: 'Please connect a Base Sponsored Smart Wallet',
@@ -165,43 +170,66 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
 
     try {
       if (typeof window !== 'undefined' && window.ethereum) {
-        const provider = new ethers.BrowserProvider(window.ethereum);
-
-        const result = await upgradeBaseSponsoredSmartWallet({
-          walletAddress,
-          chainId,
-          provider,
-        });
-
-        if (result.success && result.txHash) {
-          // Mark this chain as upgraded
-          setUpgradedChains(prev => new Set([...prev, chainId]));
-          
-          // Update current implementation immediately
-          if (result.newImplementation) {
-            setCurrentImplementation(result.newImplementation);
-            setNeedsUpgrade(false);
-          }
-          setUpgradeStatus({
-            type: 'success',
-            message: `Base Sponsored Smart Wallet upgraded successfully on ${chain?.name}!`,
-            txHash: result.txHash,
+        // First, try official Base wallet_upgrade method
+        const supportsBase = await supportsBaseUpgrade(window.ethereum);
+        
+        if (supportsBase) {
+          // Use official Base method (recommended)
+          const result = await upgradeBaseWallet({
+            walletAddress,
+            provider: window.ethereum,
           });
-          // Refresh implementation address after a delay
-          setTimeout(async () => {
-            if (typeof window !== 'undefined' && window.ethereum && address) {
-              const provider = new ethers.BrowserProvider(window.ethereum);
-              const current = await getBaseSponsoredWalletImplementation(provider, address);
-              if (current) {
-                setCurrentImplementation(current);
-              }
+
+          if (result.success && result.txHash) {
+            // Mark this chain as upgraded
+            setUpgradedChains(prev => new Set([...prev, chainId]));
+            
+            // Get updated implementation
+            const provider = new ethers.BrowserProvider(window.ethereum);
+            const current = await getBaseSponsoredWalletImplementation(provider, walletAddress);
+            if (current) {
+              setCurrentImplementation(current);
             }
-          }, 3000);
+            
+            setUpgradeStatus({
+              type: 'success',
+              message: `Base Sponsored Smart Wallet upgraded successfully on ${chain?.name}!`,
+              txHash: result.txHash,
+            });
+            setNeedsUpgrade(false);
+          } else {
+            setUpgradeStatus({
+              type: 'error',
+              message: result.error || 'Upgrade failed',
+            });
+          }
         } else {
-          setUpgradeStatus({
-            type: result.error?.includes('already') ? 'success' : 'error',
-            message: result.error || 'Upgrade failed',
+          // Fallback to direct contract upgrade if official method not available
+          const provider = new ethers.BrowserProvider(window.ethereum);
+          const result = await upgradeBaseSponsoredSmartWallet({
+            walletAddress,
+            chainId,
+            provider,
           });
+
+          if (result.success && result.txHash) {
+            setUpgradedChains(prev => new Set([...prev, chainId]));
+            
+            if (result.newImplementation) {
+              setCurrentImplementation(result.newImplementation);
+              setNeedsUpgrade(false);
+            }
+            setUpgradeStatus({
+              type: 'success',
+              message: `Base Sponsored Smart Wallet upgraded successfully on ${chain?.name}!`,
+              txHash: result.txHash,
+            });
+          } else {
+            setUpgradeStatus({
+              type: result.error?.includes('already') ? 'success' : 'error',
+              message: result.error || 'Upgrade failed',
+            });
+          }
         }
       } else {
         throw new Error('Wallet not connected');
