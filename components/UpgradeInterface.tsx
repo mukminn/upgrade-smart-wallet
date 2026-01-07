@@ -177,15 +177,26 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
         });
 
         if (result.success && result.txHash) {
+          // Update current implementation immediately
+          if (result.newImplementation) {
+            setCurrentImplementation(result.newImplementation);
+            setNeedsUpgrade(false);
+          }
           setUpgradeStatus({
             type: 'success',
-            message: `BaseApp Smart Wallet upgraded successfully! New implementation: ${result.newImplementation?.slice(0, 10)}...`,
+            message: `BaseApp Smart Wallet upgraded successfully!`,
             txHash: result.txHash,
           });
-          // Refresh implementation address
-          setTimeout(() => {
-            handleGetImplementation();
-          }, 2000);
+          // Refresh implementation address after a delay
+          setTimeout(async () => {
+            if (typeof window !== 'undefined' && window.ethereum && address) {
+              const provider = new ethers.BrowserProvider(window.ethereum);
+              const current = await getBaseAppWalletImplementation(provider, address);
+              if (current) {
+                setCurrentImplementation(current);
+              }
+            }
+          }, 3000);
         } else {
           setUpgradeStatus({
             type: result.error?.includes('already') ? 'success' : 'error',
@@ -483,24 +494,47 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
           ) : (
             <button
               onClick={async () => {
-                if (isBaseAppWallet && needsUpgrade && latestBaseAppImpl) {
-                  await handleAutoUpgrade();
-                } else if (isBaseAppWallet) {
-                  // Try to upgrade even if needsUpgrade is false (force upgrade)
+                if (isBaseAppWallet) {
+                  // BaseApp wallet - use auto upgrade
                   await handleAutoUpgrade();
                 } else {
-                  // For non-BaseApp wallets, try to upgrade with current address
-                  if (address) {
-                    setWalletAddress(address);
-                    // Try to get implementation and upgrade
-                    await handleGetImplementation();
-                    if (newImplementation) {
-                      await handleUpgrade();
-                    } else {
+                  // For non-BaseApp wallets, first get current implementation
+                  if (address && publicClient) {
+                    setLoading(true);
+                    try {
+                      // Get current implementation first
+                      const IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
+                      const storage = await publicClient.getStorageAt({
+                        address: address as `0x${string}`,
+                        slot: IMPLEMENTATION_SLOT as `0x${string}`,
+                      });
+
+                      if (storage && storage !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
+                        const currentImpl = '0x' + storage.slice(-40);
+                        setCurrentImplementation(currentImpl);
+                        
+                        // If we have new implementation, proceed with upgrade
+                        if (newImplementation) {
+                          await handleUpgrade();
+                        } else {
+                          setUpgradeStatus({
+                            type: 'error',
+                            message: 'Please provide new implementation address. Current implementation: ' + currentImpl.slice(0, 10) + '...',
+                          });
+                        }
+                      } else {
+                        setUpgradeStatus({
+                          type: 'error',
+                          message: 'This wallet does not appear to be an upgradeable contract. No implementation address found.',
+                        });
+                      }
+                    } catch (error: any) {
                       setUpgradeStatus({
                         type: 'error',
-                        message: 'Could not determine upgrade path. Please ensure this is an upgradeable wallet.',
+                        message: error.message || 'Could not check wallet implementation. Please ensure this is an upgradeable wallet.',
                       });
+                    } finally {
+                      setLoading(false);
                     }
                   }
                 }
@@ -531,23 +565,62 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
         </div>
       )}
 
-      {/* Current Implementation Display */}
-      {currentImplementation && (
-        <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-4">
-          <div className="text-sm text-gray-300">
-            <span className="font-semibold text-white">Current Implementation: </span>
-            <span className="font-mono text-green-400 break-all">
-              {currentImplementation}
-            </span>
+      {/* Implementation Address Display - Always Show When Available */}
+      {(currentImplementation || isConnected) && (
+        <div className="bg-gradient-to-r from-green-500/10 to-blue-500/10 border-2 border-green-500/30 rounded-xl p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <CheckCircle className="w-6 h-6 text-green-400" />
+            <h3 className="text-lg font-bold text-white">Smart Wallet Implementation</h3>
           </div>
-          {latestBaseAppImpl && (
-            <div className="text-sm text-gray-300 mt-2">
-              <span className="font-semibold text-white">Latest Implementation: </span>
-              <span className="font-mono text-blue-400 break-all">
-                {latestBaseAppImpl}
-              </span>
+          
+          {currentImplementation ? (
+            <>
+              <div className="bg-gray-900/50 rounded-lg p-4 mb-3">
+                <div className="text-xs text-gray-400 mb-1">Current Implementation Address</div>
+                <div className="text-base font-mono text-green-400 break-all font-semibold">
+                  {currentImplementation}
+                </div>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(currentImplementation);
+                    setUpgradeStatus({
+                      type: 'success',
+                      message: 'Implementation address copied to clipboard!',
+                    });
+                  }}
+                  className="mt-2 text-xs text-blue-400 hover:text-blue-300"
+                >
+                  📋 Copy Address
+                </button>
+              </div>
+              
+              {latestBaseAppImpl && latestBaseAppImpl.toLowerCase() !== currentImplementation.toLowerCase() && (
+                <div className="bg-gray-900/50 rounded-lg p-4">
+                  <div className="text-xs text-gray-400 mb-1">Latest Available Implementation</div>
+                  <div className="text-base font-mono text-blue-400 break-all font-semibold">
+                    {latestBaseAppImpl}
+                  </div>
+                  <div className="text-xs text-yellow-400 mt-2">
+                    ⚠️ Upgrade available to latest version
+                  </div>
+                </div>
+              )}
+              
+              {latestBaseAppImpl && latestBaseAppImpl.toLowerCase() === currentImplementation.toLowerCase() && (
+                <div className="bg-green-500/20 border border-green-500/40 rounded-lg p-3 text-center">
+                  <CheckCircle className="w-5 h-5 text-green-400 mx-auto mb-1" />
+                  <p className="text-green-400 text-sm font-medium">✓ Wallet is on the latest implementation</p>
+                </div>
+              )}
+            </>
+          ) : isConnected && !checkingWallet ? (
+            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 text-center">
+              <Info className="w-5 h-5 text-yellow-400 mx-auto mb-2" />
+              <p className="text-yellow-400 text-sm">
+                Could not detect implementation address. This wallet may not be upgradeable or is not a smart wallet.
+              </p>
             </div>
-          )}
+          ) : null}
         </div>
       )}
 
