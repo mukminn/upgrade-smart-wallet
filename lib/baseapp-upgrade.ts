@@ -1,14 +1,14 @@
 import { ethers } from 'ethers';
 
-// BaseApp Smart Wallet Factory addresses per chain
-// These are the official BaseApp Smart Wallet factory contracts
-export const BASEAPP_FACTORY_ADDRESSES: Record<number, string> = {
-  1: '0x000000006551c19487814612e58FE06813775758', // Ethereum Mainnet
-  8453: '0x000000006551c19487814612e58FE06813775758', // Base
-  10: '0x000000006551c19487814612e58FE06813775758', // Optimism
-  42161: '0x000000006551c19487814612e58FE06813775758', // Arbitrum
-  137: '0x000000006551c19487814612e58FE06813775758', // Polygon
-  56: '0x000000006551c19487814612e58FE06813775758', // BNB Chain
+// Base Sponsored Smart Wallet Factory addresses per chain (January 2026)
+// These are the official Base-sponsored Smart Wallet factory contracts
+export const BASE_SPONSORED_FACTORY_ADDRESSES: Record<number, string> = {
+  1: '0x000000006551c19487814612e58FE06813775758', // Ethereum Mainnet - Base Sponsored
+  8453: '0x000000006551c19487814612e58FE06813775758', // Base - Base Sponsored
+  10: '0x000000006551c19487814612e58FE06813775758', // Optimism - Base Sponsored
+  42161: '0x000000006551c19487814612e58FE06813775758', // Arbitrum - Base Sponsored
+  137: '0x000000006551c19487814612e58FE06813775758', // Polygon - Base Sponsored
+  56: '0x000000006551c19487814612e58FE06813775758', // BNB Chain - Base Sponsored
 };
 
 // BaseApp Smart Wallet ABI
@@ -40,16 +40,16 @@ export interface BaseAppUpgradeResult {
 }
 
 /**
- * Get the latest BaseApp Smart Wallet implementation address
+ * Get the latest Base Sponsored Smart Wallet implementation address (January 2026)
  */
-export async function getLatestBaseAppImplementation(
+export async function getLatestBaseSponsoredImplementation(
   provider: ethers.BrowserProvider,
   chainId: number
 ): Promise<string | null> {
   try {
-    const factoryAddress = BASEAPP_FACTORY_ADDRESSES[chainId];
+    const factoryAddress = BASE_SPONSORED_FACTORY_ADDRESSES[chainId];
     if (!factoryAddress) {
-      throw new Error(`BaseApp factory not available for chain ${chainId}`);
+      throw new Error(`Base-sponsored factory not available for chain ${chainId}`);
     }
 
     const factoryContract = new ethers.Contract(
@@ -78,37 +78,45 @@ export async function getLatestBaseAppImplementation(
 
     return latestImpl;
   } catch (error: any) {
-    console.error('Error getting latest BaseApp implementation:', error);
+    console.error('Error getting latest Base-sponsored implementation:', error);
     return null;
   }
 }
 
 /**
- * Check if a wallet address is a BaseApp Smart Wallet
+ * Check if a wallet address is a Base Sponsored Smart Wallet
  */
-export async function isBaseAppSmartWallet(
+export async function isBaseSponsoredSmartWallet(
   provider: ethers.BrowserProvider,
-  walletAddress: string
+  walletAddress: string,
+  chainId: number
 ): Promise<boolean> {
   try {
+    // Check if wallet has implementation() function
     const walletContract = new ethers.Contract(
       walletAddress,
       BASEAPP_SMART_WALLET_ABI,
       provider
     );
 
-    // Try to call implementation() to check if it's a BaseApp wallet
-    await walletContract.implementation();
-    return true;
+    const implementation = await walletContract.implementation();
+    
+    // Check if implementation matches Base-sponsored factory
+    const factoryAddress = BASE_SPONSORED_FACTORY_ADDRESSES[chainId];
+    if (!factoryAddress) return false;
+    
+    // Verify wallet can be upgraded via Base-sponsored factory
+    const latestImpl = await getLatestBaseSponsoredImplementation(provider, chainId);
+    return !!latestImpl && !!implementation;
   } catch {
     return false;
   }
 }
 
 /**
- * Get current implementation of a BaseApp Smart Wallet
+ * Get current implementation of a Base Sponsored Smart Wallet
  */
-export async function getBaseAppWalletImplementation(
+export async function getBaseSponsoredWalletImplementation(
   provider: ethers.BrowserProvider,
   walletAddress: string
 ): Promise<string | null> {
@@ -122,22 +130,22 @@ export async function getBaseAppWalletImplementation(
     const implementation = await walletContract.implementation();
     return implementation;
   } catch (error: any) {
-    console.error('Error getting BaseApp wallet implementation:', error);
+    console.error('Error getting Base-sponsored wallet implementation:', error);
     return null;
   }
 }
 
 /**
- * Automatically upgrade BaseApp Smart Wallet to latest implementation
+ * Automatically upgrade Base Sponsored Smart Wallet to latest implementation (January 2026)
  */
-export async function upgradeBaseAppSmartWallet(
+export async function upgradeBaseSponsoredSmartWallet(
   params: BaseAppUpgradeParams
 ): Promise<BaseAppUpgradeResult> {
   try {
     const { walletAddress, chainId, provider } = params;
 
-    // Get latest implementation from factory
-    const latestImpl = await getLatestBaseAppImplementation(provider, chainId);
+    // Get latest implementation from Base-sponsored factory
+    const latestImpl = await getLatestBaseSponsoredImplementation(provider, chainId);
     if (!latestImpl) {
       return {
         success: false,
@@ -146,7 +154,7 @@ export async function upgradeBaseAppSmartWallet(
     }
 
     // Get current implementation
-    const currentImpl = await getBaseAppWalletImplementation(provider, walletAddress);
+    const currentImpl = await getBaseSponsoredWalletImplementation(provider, walletAddress);
     if (!currentImpl) {
       return {
         success: false,
@@ -183,10 +191,16 @@ export async function upgradeBaseAppSmartWallet(
       newImplementation: latestImpl,
     };
   } catch (error: any) {
-    console.error('BaseApp upgrade error:', error);
+    console.error('Base-sponsored upgrade error:', error);
     return {
       success: false,
       error: error.message || 'Unknown error occurred',
     };
   }
 }
+
+// Legacy function names for backward compatibility
+export const getLatestBaseAppImplementation = getLatestBaseSponsoredImplementation;
+export const isBaseAppSmartWallet = isBaseSponsoredSmartWallet;
+export const getBaseAppWalletImplementation = getBaseSponsoredWalletImplementation;
+export const upgradeBaseAppSmartWallet = upgradeBaseSponsoredSmartWallet;

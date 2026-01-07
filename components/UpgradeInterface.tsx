@@ -5,10 +5,10 @@ import { useAccount, usePublicClient, useWalletClient } from 'wagmi';
 import { ethers } from 'ethers';
 import { upgradeSmartWallet, getImplementationAddress } from '@/lib/wallet-upgrade';
 import { 
-  upgradeBaseAppSmartWallet, 
-  getLatestBaseAppImplementation,
-  getBaseAppWalletImplementation,
-  isBaseAppSmartWallet 
+  upgradeBaseSponsoredSmartWallet, 
+  getLatestBaseSponsoredImplementation,
+  getBaseSponsoredWalletImplementation,
+  isBaseSponsoredSmartWallet 
 } from '@/lib/baseapp-upgrade';
 import { getChainById } from '@/lib/chains';
 import { ArrowUpCircle, Loader2, CheckCircle, XCircle, Info, Zap } from 'lucide-react';
@@ -26,11 +26,12 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
   const [newImplementation, setNewImplementation] = useState('');
   const [currentImplementation, setCurrentImplementation] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [isBaseAppWallet, setIsBaseAppWallet] = useState(false);
-  const [latestBaseAppImpl, setLatestBaseAppImpl] = useState<string | null>(null);
+  const [isBaseSponsoredWallet, setIsBaseSponsoredWallet] = useState(false);
+  const [latestBaseSponsoredImpl, setLatestBaseSponsoredImpl] = useState<string | null>(null);
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
   const [needsUpgrade, setNeedsUpgrade] = useState(false);
   const [checkingWallet, setCheckingWallet] = useState(false);
+  const [upgradedChains, setUpgradedChains] = useState<Set<number>>(new Set());
   const [upgradeStatus, setUpgradeStatus] = useState<{
     type: 'success' | 'error' | null;
     message: string;
@@ -44,8 +45,8 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
     const checkConnectedWallet = async () => {
       if (!isConnected || !address || !publicClient) {
         setWalletAddress('');
-        setIsBaseAppWallet(false);
-        setLatestBaseAppImpl(null);
+        setIsBaseSponsoredWallet(false);
+        setLatestBaseSponsoredImpl(null);
         setCurrentImplementation(null);
         setNeedsUpgrade(false);
         setShowUpgradeDialog(false);
@@ -60,53 +61,49 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
         if (typeof window !== 'undefined' && window.ethereum) {
           const provider = new ethers.BrowserProvider(window.ethereum);
           
-          // Check if it's a BaseApp wallet
-          const isBaseApp = await isBaseAppSmartWallet(provider, address);
-          setIsBaseAppWallet(isBaseApp);
+          // Check if it's a Base Sponsored wallet
+          const isBaseSponsored = await isBaseSponsoredSmartWallet(provider, address, chainId);
+          setIsBaseSponsoredWallet(isBaseSponsored);
 
-          if (isBaseApp) {
-            // Get latest implementation
-            const latest = await getLatestBaseAppImplementation(provider, chainId);
-            setLatestBaseAppImpl(latest);
+          if (isBaseSponsored) {
+            // Get latest Base-sponsored implementation
+            const latest = await getLatestBaseSponsoredImplementation(provider, chainId);
+            setLatestBaseSponsoredImpl(latest);
             
-            // Get current implementation
-            const current = await getBaseAppWalletImplementation(provider, address);
-            setCurrentImplementation(current);
+            // Only get current implementation if this chain has been upgraded
+            if (upgradedChains.has(chainId)) {
+              const current = await getBaseSponsoredWalletImplementation(provider, address);
+              setCurrentImplementation(current);
+            } else {
+              // Don't show implementation for chains that haven't been upgraded
+              setCurrentImplementation(null);
+            }
             
             // Check if upgrade is needed
-            if (latest && current && latest.toLowerCase() !== current.toLowerCase()) {
-              setNeedsUpgrade(true);
-              setNewImplementation(latest);
-              setShowUpgradeDialog(true);
-            } else if (latest && current && latest.toLowerCase() === current.toLowerCase()) {
-              setNeedsUpgrade(false);
-              setUpgradeStatus({
-                type: 'success',
-                message: 'Your wallet is already on the latest implementation!',
-              });
+            if (latest) {
+              if (upgradedChains.has(chainId)) {
+                const current = await getBaseSponsoredWalletImplementation(provider, address);
+                if (current && latest.toLowerCase() !== current.toLowerCase()) {
+                  setNeedsUpgrade(true);
+                  setNewImplementation(latest);
+                } else {
+                  setNeedsUpgrade(false);
+                }
+              } else {
+                // Chain not upgraded yet, upgrade is available
+                setNeedsUpgrade(true);
+                setNewImplementation(latest);
+              }
             }
           } else {
-            // For non-BaseApp wallets, try to get implementation using storage slot
-            const IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
-            try {
-              const storage = await publicClient.getStorageAt({
-                address: address as `0x${string}`,
-                slot: IMPLEMENTATION_SLOT as `0x${string}`,
-              });
-
-              if (storage && storage !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
-                const impl = '0x' + storage.slice(-40);
-                setCurrentImplementation(impl);
-              }
-            } catch (error) {
-              // Not an upgradeable wallet
-              console.log('Wallet is not upgradeable');
-            }
+            // Not a Base-sponsored wallet - don't show implementation
+            setCurrentImplementation(null);
+            setIsBaseSponsoredWallet(false);
           }
         }
       } catch (error) {
         console.error('Error checking connected wallet:', error);
-        setIsBaseAppWallet(false);
+        setIsBaseSponsoredWallet(false);
       } finally {
         setCheckingWallet(false);
       }
@@ -155,10 +152,10 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
   };
 
   const handleAutoUpgrade = async () => {
-    if (!walletAddress || !isBaseAppWallet || !walletClient) {
+    if (!walletAddress || !isBaseSponsoredWallet || !walletClient) {
       setUpgradeStatus({
         type: 'error',
-        message: 'Please connect a BaseApp Smart Wallet',
+        message: 'Please connect a Base Sponsored Smart Wallet',
       });
       return;
     }
@@ -170,13 +167,16 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
       if (typeof window !== 'undefined' && window.ethereum) {
         const provider = new ethers.BrowserProvider(window.ethereum);
 
-        const result = await upgradeBaseAppSmartWallet({
+        const result = await upgradeBaseSponsoredSmartWallet({
           walletAddress,
           chainId,
           provider,
         });
 
         if (result.success && result.txHash) {
+          // Mark this chain as upgraded
+          setUpgradedChains(prev => new Set([...prev, chainId]));
+          
           // Update current implementation immediately
           if (result.newImplementation) {
             setCurrentImplementation(result.newImplementation);
@@ -184,14 +184,14 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
           }
           setUpgradeStatus({
             type: 'success',
-            message: `BaseApp Smart Wallet upgraded successfully!`,
+            message: `Base Sponsored Smart Wallet upgraded successfully on ${chain?.name}!`,
             txHash: result.txHash,
           });
           // Refresh implementation address after a delay
           setTimeout(async () => {
             if (typeof window !== 'undefined' && window.ethereum && address) {
               const provider = new ethers.BrowserProvider(window.ethereum);
-              const current = await getBaseAppWalletImplementation(provider, address);
+              const current = await getBaseSponsoredWalletImplementation(provider, address);
               if (current) {
                 setCurrentImplementation(current);
               }
@@ -229,20 +229,24 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
     setUpgradeStatus({ type: null, message: '' });
 
     try {
-      // If it's a BaseApp wallet, use BaseApp upgrade function
-      if (isBaseAppWallet) {
+      // If it's a Base Sponsored wallet, use Base Sponsored upgrade function
+      if (isBaseSponsoredWallet) {
         if (typeof window !== 'undefined' && window.ethereum) {
           const provider = new ethers.BrowserProvider(window.ethereum);
-          const result = await upgradeBaseAppSmartWallet({
+          const result = await upgradeBaseSponsoredSmartWallet({
             walletAddress,
             chainId,
             provider,
           });
 
           if (result.success && result.txHash) {
+            setUpgradedChains(prev => new Set([...prev, chainId]));
+            if (result.newImplementation) {
+              setCurrentImplementation(result.newImplementation);
+            }
             setUpgradeStatus({
               type: 'success',
-              message: 'BaseApp Smart Wallet upgraded successfully!',
+              message: 'Base Sponsored Smart Wallet upgraded successfully!',
               txHash: result.txHash,
             });
             setTimeout(() => {
@@ -322,14 +326,14 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
           <div className="text-sm text-gray-300 font-mono break-all">
             {address}
           </div>
-          {isBaseAppWallet && (
+          {isBaseSponsoredWallet && (
             <div className="mt-2 text-sm text-purple-400">
-              ✓ BaseApp Smart Wallet detected
+              ✓ Base Sponsored Smart Wallet detected
             </div>
           )}
           
-          {/* Upgrade Button - Always Visible */}
-          {isBaseAppWallet && needsUpgrade && latestBaseAppImpl && (
+          {/* Upgrade Button - Always Visible for Base Sponsored */}
+          {isBaseSponsoredWallet && needsUpgrade && latestBaseSponsoredImpl && (
             <div className="mt-4 pt-4 border-t border-green-500/20">
               <button
                 onClick={handleAutoUpgrade}
@@ -355,7 +359,7 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
           )}
           
           {/* Already Up to Date */}
-          {isBaseAppWallet && !needsUpgrade && currentImplementation && (
+          {isBaseSponsoredWallet && !needsUpgrade && upgradedChains.has(chainId) && currentImplementation && (
             <div className="mt-4 pt-4 border-t border-green-500/20">
               <div className="bg-green-500/20 border border-green-500/40 rounded-lg p-3 text-center">
                 <CheckCircle className="w-5 h-5 text-green-400 mx-auto mb-2" />
@@ -367,7 +371,7 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
       )}
 
       {/* Upgrade Dialog (like BaseApp mobile dialog) */}
-      {showUpgradeDialog && needsUpgrade && isBaseAppWallet && (
+      {showUpgradeDialog && needsUpgrade && isBaseSponsoredWallet && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in">
             {/* Upgrade Graphic */}
@@ -469,24 +473,28 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
         <div className="bg-gradient-to-r from-blue-600/20 to-purple-600/20 border-2 border-blue-500/50 rounded-xl p-6">
           <div className="text-center mb-4">
             <h3 className="text-xl font-bold text-white mb-2">
-              {isBaseAppWallet && needsUpgrade ? (
-                <>⚡ Upgrade Available</>
-              ) : isBaseAppWallet ? (
+              {isBaseSponsoredWallet && needsUpgrade ? (
+                <>⚡ Upgrade Available (Sponsored by Base)</>
+              ) : isBaseSponsoredWallet && upgradedChains.has(chainId) ? (
                 <>✓ Wallet Up to Date</>
+              ) : isBaseSponsoredWallet ? (
+                <>🔧 Upgrade Available (Sponsored by Base)</>
               ) : (
-                <>🔧 Upgrade Smart Wallet</>
+                <>⚠️ Not a Base Sponsored Wallet</>
               )}
             </h3>
             <p className="text-gray-300 text-sm">
-              {isBaseAppWallet && needsUpgrade
-                ? 'Your wallet can be upgraded to the latest version'
-                : isBaseAppWallet
+              {isBaseSponsoredWallet && needsUpgrade
+                ? `Upgrade your wallet to the latest Base-sponsored implementation on ${chain?.name}`
+                : isBaseSponsoredWallet && upgradedChains.has(chainId)
                 ? 'Your wallet is already on the latest version'
-                : 'Upgrade your smart wallet to the latest implementation'}
+                : isBaseSponsoredWallet
+                ? `Upgrade available on ${chain?.name} - Network fees sponsored by Base`
+                : 'This wallet is not a Base Sponsored Smart Wallet'}
             </p>
           </div>
           
-          {isBaseAppWallet && !needsUpgrade ? (
+          {isBaseSponsoredWallet && !needsUpgrade && upgradedChains.has(chainId) ? (
             <div className="bg-green-500/20 border border-green-500/40 rounded-xl p-4 text-center">
               <CheckCircle className="w-8 h-8 text-green-400 mx-auto mb-2" />
               <p className="text-green-400 font-semibold">No upgrade needed</p>
@@ -494,8 +502,8 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
           ) : (
             <button
               onClick={async () => {
-                if (isBaseAppWallet) {
-                  // BaseApp wallet - use auto upgrade
+                if (isBaseSponsoredWallet) {
+                  // Base Sponsored wallet - use auto upgrade
                   await handleAutoUpgrade();
                 } else {
                   // For non-BaseApp wallets, first get current implementation
@@ -557,7 +565,7 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
             </button>
           )}
           
-          {isBaseAppWallet && needsUpgrade && (
+          {isBaseSponsoredWallet && needsUpgrade && (
             <p className="text-center text-xs text-gray-400 mt-3">
               💰 Network fees sponsored by Base
             </p>
@@ -565,15 +573,15 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
         </div>
       )}
 
-      {/* Implementation Address Display - Always Show When Available */}
-      {(currentImplementation || isConnected) && (
+      {/* Implementation Address Display - Only Show for Upgraded Chains */}
+      {isConnected && upgradedChains.has(chainId) && currentImplementation && (
         <div className="bg-gradient-to-r from-green-500/10 to-blue-500/10 border-2 border-green-500/30 rounded-xl p-6">
           <div className="flex items-center gap-2 mb-4">
             <CheckCircle className="w-6 h-6 text-green-400" />
-            <h3 className="text-lg font-bold text-white">Smart Wallet Implementation</h3>
+            <h3 className="text-lg font-bold text-white">Base Sponsored Implementation ({chain?.name})</h3>
           </div>
           
-          {currentImplementation ? (
+          {currentImplementation && (
             <>
               <div className="bg-gray-900/50 rounded-lg p-4 mb-3">
                 <div className="text-xs text-gray-400 mb-1">Current Implementation Address</div>
@@ -594,11 +602,11 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
                 </button>
               </div>
               
-              {latestBaseAppImpl && latestBaseAppImpl.toLowerCase() !== currentImplementation.toLowerCase() && (
+              {latestBaseSponsoredImpl && latestBaseSponsoredImpl.toLowerCase() !== currentImplementation.toLowerCase() && (
                 <div className="bg-gray-900/50 rounded-lg p-4">
-                  <div className="text-xs text-gray-400 mb-1">Latest Available Implementation</div>
+                  <div className="text-xs text-gray-400 mb-1">Latest Available Implementation (Base Sponsored)</div>
                   <div className="text-base font-mono text-blue-400 break-all font-semibold">
-                    {latestBaseAppImpl}
+                    {latestBaseSponsoredImpl}
                   </div>
                   <div className="text-xs text-yellow-400 mt-2">
                     ⚠️ Upgrade available to latest version
@@ -606,21 +614,14 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
                 </div>
               )}
               
-              {latestBaseAppImpl && latestBaseAppImpl.toLowerCase() === currentImplementation.toLowerCase() && (
+              {latestBaseSponsoredImpl && latestBaseSponsoredImpl.toLowerCase() === currentImplementation.toLowerCase() && (
                 <div className="bg-green-500/20 border border-green-500/40 rounded-lg p-3 text-center">
                   <CheckCircle className="w-5 h-5 text-green-400 mx-auto mb-1" />
-                  <p className="text-green-400 text-sm font-medium">✓ Wallet is on the latest implementation</p>
+                  <p className="text-green-400 text-sm font-medium">✓ Wallet is on the latest Base-sponsored implementation</p>
                 </div>
               )}
             </>
-          ) : isConnected && !checkingWallet ? (
-            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 text-center">
-              <Info className="w-5 h-5 text-yellow-400 mx-auto mb-2" />
-              <p className="text-yellow-400 text-sm">
-                Could not detect implementation address. This wallet may not be upgradeable or is not a smart wallet.
-              </p>
-            </div>
-          ) : null}
+          )}
         </div>
       )}
 
