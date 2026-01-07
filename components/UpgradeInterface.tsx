@@ -18,7 +18,7 @@ interface UpgradeInterfaceProps {
 }
 
 export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
-  const { address } = useAccount();
+  const { address, isConnected } = useAccount();
   const publicClient = usePublicClient({ chainId });
   const { data: walletClient } = useWalletClient({ chainId });
   
@@ -28,7 +28,9 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
   const [loading, setLoading] = useState(false);
   const [isBaseAppWallet, setIsBaseAppWallet] = useState(false);
   const [latestBaseAppImpl, setLatestBaseAppImpl] = useState<string | null>(null);
-  const [autoUpgradeMode, setAutoUpgradeMode] = useState(false);
+  const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
+  const [needsUpgrade, setNeedsUpgrade] = useState(false);
+  const [checkingWallet, setCheckingWallet] = useState(false);
   const [upgradeStatus, setUpgradeStatus] = useState<{
     type: 'success' | 'error' | null;
     message: string;
@@ -37,19 +39,29 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
 
   const chain = getChainById(chainId);
 
-  // Auto-detect BaseApp wallet when address changes
+  // Auto-detect connected wallet and check if upgrade is needed
   useEffect(() => {
-    const checkBaseAppWallet = async () => {
-      if (!walletAddress || !publicClient) {
+    const checkConnectedWallet = async () => {
+      if (!isConnected || !address || !publicClient) {
+        setWalletAddress('');
         setIsBaseAppWallet(false);
         setLatestBaseAppImpl(null);
+        setCurrentImplementation(null);
+        setNeedsUpgrade(false);
+        setShowUpgradeDialog(false);
         return;
       }
+
+      // Auto-use connected wallet address
+      setWalletAddress(address);
+      setCheckingWallet(true);
 
       try {
         if (typeof window !== 'undefined' && window.ethereum) {
           const provider = new ethers.BrowserProvider(window.ethereum);
-          const isBaseApp = await isBaseAppSmartWallet(provider, walletAddress);
+          
+          // Check if it's a BaseApp wallet
+          const isBaseApp = await isBaseAppSmartWallet(provider, address);
           setIsBaseAppWallet(isBaseApp);
 
           if (isBaseApp) {
@@ -58,23 +70,50 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
             setLatestBaseAppImpl(latest);
             
             // Get current implementation
-            const current = await getBaseAppWalletImplementation(provider, walletAddress);
+            const current = await getBaseAppWalletImplementation(provider, address);
             setCurrentImplementation(current);
             
-            // Auto-fill new implementation if available
-            if (latest) {
+            // Check if upgrade is needed
+            if (latest && current && latest.toLowerCase() !== current.toLowerCase()) {
+              setNeedsUpgrade(true);
               setNewImplementation(latest);
+              setShowUpgradeDialog(true);
+            } else if (latest && current && latest.toLowerCase() === current.toLowerCase()) {
+              setNeedsUpgrade(false);
+              setUpgradeStatus({
+                type: 'success',
+                message: 'Your wallet is already on the latest implementation!',
+              });
+            }
+          } else {
+            // For non-BaseApp wallets, try to get implementation using storage slot
+            const IMPLEMENTATION_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
+            try {
+              const storage = await publicClient.getStorageAt({
+                address: address as `0x${string}`,
+                slot: IMPLEMENTATION_SLOT as `0x${string}`,
+              });
+
+              if (storage && storage !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
+                const impl = '0x' + storage.slice(-40);
+                setCurrentImplementation(impl);
+              }
+            } catch (error) {
+              // Not an upgradeable wallet
+              console.log('Wallet is not upgradeable');
             }
           }
         }
       } catch (error) {
-        console.error('Error checking BaseApp wallet:', error);
+        console.error('Error checking connected wallet:', error);
         setIsBaseAppWallet(false);
+      } finally {
+        setCheckingWallet(false);
       }
     };
 
-    checkBaseAppWallet();
-  }, [walletAddress, chainId, publicClient]);
+    checkConnectedWallet();
+  }, [isConnected, address, chainId, publicClient]);
 
   const handleGetImplementation = async () => {
     if (!walletAddress || !publicClient) return;
@@ -246,74 +285,137 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
     }
   };
 
+  // Handle upgrade from dialog
+  const handleDialogUpgrade = async () => {
+    setShowUpgradeDialog(false);
+    await handleAutoUpgrade();
+  };
+
   return (
     <div className="space-y-6">
-      {/* Info Banner */}
-      <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 flex items-start gap-3">
-        <Info className="w-5 h-5 text-blue-400 mt-0.5 flex-shrink-0" />
-        <div className="text-sm text-gray-300">
-          <p className="font-semibold text-white mb-1">Important Notes:</p>
-          <ul className="list-disc list-inside space-y-1 text-gray-400">
-            <li>Ensure the wallet address is a proxy contract (upgradeable)</li>
-            <li>Verify the new implementation address is correct and deployed</li>
-            <li>Make sure you have the necessary permissions to upgrade</li>
-            <li>Always test on testnets first</li>
-          </ul>
+      {/* Checking Wallet Status */}
+      {checkingWallet && (
+        <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 flex items-center gap-3">
+          <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+          <span className="text-white">Checking your connected wallet...</span>
         </div>
-      </div>
+      )}
 
-      {/* Wallet Address Input */}
-      <div>
-        <label className="block text-white font-medium mb-2">
-          Smart Wallet Address
-        </label>
-        <input
-          type="text"
-          value={walletAddress}
-          onChange={(e) => setWalletAddress(e.target.value)}
-          placeholder="0x..."
-          className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        />
-        <div className="flex gap-2 mt-2">
-          <button
-            onClick={handleGetImplementation}
-            disabled={loading || !walletAddress}
-            className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors"
-          >
-            {loading ? (
-              <span className="flex items-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Checking...
-              </span>
-            ) : (
-              'Get Current Implementation'
-            )}
-          </button>
-          {isBaseAppWallet && latestBaseAppImpl && (
-            <button
-              onClick={handleAutoUpgrade}
-              disabled={loading || !walletAddress}
-              className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 disabled:from-gray-600 disabled:to-gray-600 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center gap-2"
-            >
-              <Zap className="w-4 h-4" />
-              Auto Upgrade BaseApp
-            </button>
+      {/* Connected Wallet Info */}
+      {isConnected && address && !checkingWallet && (
+        <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <CheckCircle className="w-5 h-5 text-green-400" />
+            <span className="text-white font-semibold">Connected Wallet</span>
+          </div>
+          <div className="text-sm text-gray-300 font-mono break-all">
+            {address}
+          </div>
+          {isBaseAppWallet && (
+            <div className="mt-2 text-sm text-purple-400">
+              ✓ BaseApp Smart Wallet detected
+            </div>
           )}
         </div>
-        {isBaseAppWallet && (
-          <div className="mt-2 bg-purple-500/10 border border-purple-500/20 rounded-lg p-3">
-            <div className="flex items-center gap-2 text-purple-400">
-              <CheckCircle className="w-4 h-4" />
-              <span className="text-sm font-medium">BaseApp Smart Wallet Detected</span>
-            </div>
-            {latestBaseAppImpl && (
-              <div className="text-xs text-gray-400 mt-1">
-                Latest implementation: {latestBaseAppImpl.slice(0, 20)}...
+      )}
+
+      {/* Upgrade Dialog (like BaseApp mobile dialog) */}
+      {showUpgradeDialog && needsUpgrade && isBaseAppWallet && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in">
+            {/* Upgrade Graphic */}
+            <div className="flex justify-center mb-6">
+              <div className="relative w-32 h-32">
+                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-16 h-16 bg-blue-400 rounded-full"></div>
+                <div className="absolute right-0 top-1/2 -translate-y-1/2 w-16 h-16 bg-yellow-400 rounded-full"></div>
+                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+                  <ArrowUpCircle className="w-8 h-8 text-gray-800" />
+                </div>
               </div>
-            )}
+            </div>
+
+            {/* Title */}
+            <h2 className="text-2xl font-bold text-gray-900 text-center mb-2">
+              Upgrade your wallet on {chain?.name || 'this network'}
+            </h2>
+
+            {/* Description */}
+            <p className="text-gray-600 text-center mb-6">
+              We'll need to set you up to transact on {chain?.name || 'this network'}. We'll sponsor the network fees.
+            </p>
+
+            {/* Network Fee Info */}
+            <div className="flex justify-between items-center mb-6 p-4 bg-gray-50 rounded-lg">
+              <span className="text-gray-700 font-medium">Network fee</span>
+              <span className="text-green-600 font-semibold">Sponsored by Base</span>
+            </div>
+
+            {/* Buttons */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowUpgradeDialog(false)}
+                className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold py-3 px-4 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDialogUpgrade}
+                disabled={loading}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Upgrading...
+                  </>
+                ) : (
+                  'Upgrade now'
+                )}
+              </button>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* Manual Input (Hidden if wallet is connected) */}
+      {!isConnected && (
+        <>
+          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 flex items-start gap-3">
+            <Info className="w-5 h-5 text-blue-400 mt-0.5 flex-shrink-0" />
+            <div className="text-sm text-gray-300">
+              <p className="font-semibold text-white mb-1">Connect Your Wallet</p>
+              <p className="text-gray-400">Connect your wallet to automatically detect and upgrade your smart wallet.</p>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-white font-medium mb-2">
+              Smart Wallet Address (Manual)
+            </label>
+            <input
+              type="text"
+              value={walletAddress}
+              onChange={(e) => setWalletAddress(e.target.value)}
+              placeholder="0x..."
+              className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <button
+              onClick={handleGetImplementation}
+              disabled={loading || !walletAddress}
+              className="mt-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors"
+            >
+              {loading ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Checking...
+                </span>
+              ) : (
+                'Get Current Implementation'
+              )}
+            </button>
+          </div>
+        </>
+      )}
 
       {/* Current Implementation Display */}
       {currentImplementation && (
@@ -327,19 +429,42 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
         </div>
       )}
 
-      {/* New Implementation Input */}
-      <div>
-        <label className="block text-white font-medium mb-2">
-          New Implementation Address
-        </label>
-        <input
-          type="text"
-          value={newImplementation}
-          onChange={(e) => setNewImplementation(e.target.value)}
-          placeholder="0x..."
-          className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        />
-      </div>
+      {/* New Implementation Input (Only for manual mode) */}
+      {!isConnected && (
+        <div>
+          <label className="block text-white font-medium mb-2">
+            New Implementation Address
+          </label>
+          <input
+            type="text"
+            value={newImplementation}
+            onChange={(e) => setNewImplementation(e.target.value)}
+            placeholder="0x..."
+            className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+        </div>
+      )}
+
+      {/* Manual Upgrade Button (Only for manual mode) */}
+      {!isConnected && walletAddress && newImplementation && (
+        <button
+          onClick={handleUpgrade}
+          disabled={loading || !walletAddress || !newImplementation}
+          className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 disabled:from-gray-600 disabled:to-gray-600 disabled:cursor-not-allowed text-white font-semibold py-4 px-6 rounded-lg shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
+        >
+          {loading ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin" />
+              Processing Upgrade...
+            </>
+          ) : (
+            <>
+              <ArrowUpCircle className="w-5 h-5" />
+              Upgrade Smart Wallet
+            </>
+          )}
+        </button>
+      )}
 
       {/* Status Message */}
       {upgradeStatus.message && (
@@ -377,24 +502,6 @@ export function UpgradeInterface({ chainId }: UpgradeInterfaceProps) {
         </div>
       )}
 
-      {/* Upgrade Button */}
-      <button
-        onClick={handleUpgrade}
-        disabled={loading || !walletAddress || !newImplementation}
-        className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 disabled:from-gray-600 disabled:to-gray-600 disabled:cursor-not-allowed text-white font-semibold py-4 px-6 rounded-lg shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
-      >
-        {loading ? (
-          <>
-            <Loader2 className="w-5 h-5 animate-spin" />
-            Processing Upgrade...
-          </>
-        ) : (
-          <>
-            <ArrowUpCircle className="w-5 h-5" />
-            Upgrade Smart Wallet
-          </>
-        )}
-      </button>
     </div>
   );
 }
